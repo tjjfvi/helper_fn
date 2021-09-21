@@ -6,8 +6,8 @@ authors = ["tjjfvi"]
 edition = "2018"
 repository = "https://github.com/tjjfvi/helper_fn"
 license = "MIT"
-keywords = ["macro"]
-categories = []
+keywords = ["macro", "proc-macro"]
+categories = ["rust-patterns"]
 exclude = ["rustfmt.toml", ".gitignore"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
