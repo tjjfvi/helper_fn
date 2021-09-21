@@ -1,9 +1,9 @@
 #![doc=include_str!("../README.md")]
 
 use proc_macro::{self, TokenStream};
-use proc_macro2::{Ident as Ident2, Span as Span2};
+use proc_macro2::{Ident as Ident2, Span as Span2, TokenStream as TokenStream2};
 use proc_macro_error::{abort, proc_macro_error};
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{
   parenthesized, parse::Parse, parse_macro_input, punctuated::Punctuated, token, ItemFn, Token,
   Type, Visibility,
@@ -39,52 +39,18 @@ pub fn helper_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
   let block = &item.block;
   let output = &item.sig.output;
   let name = &item.sig.ident;
-  let _name = Ident2::new(&format!("__helper_fn_{}", name)[..], Span2::call_site());
+  let fn_name = create_fn_name(name);
   if !attr.is_empty() {
-    let captures = parse_macro_input!(attr as CaptureArgs);
-    let capture_params = captures.0.iter().map(|arg| {
-      let param = &arg.ident;
-      let ref_ty = match &arg.kind {
-        CaptureArgKind::Value => quote! {},
-        CaptureArgKind::Ref(..) => quote! { & },
-        CaptureArgKind::RefMut(..) => quote! { &mut },
-      };
-      let ty = &arg.ty;
-      quote! { #param: #ref_ty (#ty) }
+    let captures = parse_macro_input!(attr as CaptureArgsWithTypes);
+    let capture_params = captures.0.iter().map(|x| {
+      let ident = &x.capture.ident;
+      let kind = &x.capture.kind;
+      let ty = &x.ty;
+      quote! { #ident: #kind #ty }
     });
-    let capture_args = captures.0.iter().map(|arg| {
-      let ident = &arg.ident;
-      match &arg.kind {
-        CaptureArgKind::Value => quote! { #ident },
-        CaptureArgKind::Ref(..) => quote! {{
-          trait AutoRef {
-            fn auto_ref(&self) -> &Self {
-              self
-            }
-          }
-          impl<T> AutoRef for T {}
-          #ident.auto_ref()
-        }},
-        CaptureArgKind::RefMut(..) => quote! {{
-          trait AutoRefMut {
-            fn auto_ref_mut(&mut self) -> &mut Self {
-              self
-            }
-          }
-          impl<T> AutoRefMut for T {}
-          #ident.auto_ref_mut()
-        }},
-      }
-    });
-    let macro_def = quote! {
-      macro_rules! #name {
-        ($($arg:expr),* $(,)?) => {
-          #_name(#(#capture_args),*, $($arg),*)
-        }
-      }
-    };
+    let macro_def = create_macro_def(name, &fn_name, captures.0.iter().map(|x| &x.capture));
     (quote! {
-      fn #_name(#(#capture_params),*, #(#inputs),*) #output {
+      fn #fn_name(#(#capture_params),*, #(#inputs),*) #output {
         #macro_def
         #block
       }
@@ -111,43 +77,15 @@ pub fn use_helper_fn(args: TokenStream) -> TokenStream {
     .0
     .into_iter()
     .map(|arg| -> TokenStream {
-      let alias = arg
-        .alias
-        .as_ref()
-        .map(|x| &x.alias)
-        .unwrap_or_else(|| &arg.name);
-      let _name = Ident2::new(&format!("__helper_fn_{}", arg.name)[..], Span2::call_site());
-      let capture_args = arg.captures.0.iter().map(|arg| {
-        let ident = &arg.ident;
-        match &arg.kind {
-          CaptureArgKind::Value => quote! { #ident },
-          CaptureArgKind::Ref(..) => quote! {{
-            trait AutoRef {
-              fn auto_ref(&self) -> &Self {
-                self
-              }
-            }
-            impl<T> AutoRef for T {}
-            #ident.auto_ref()
-          }},
-          CaptureArgKind::RefMut(..) => quote! {{
-            trait AutoRefMut {
-              fn auto_ref_mut(&mut self) -> &mut Self {
-                self
-              }
-            }
-            impl<T> AutoRefMut for T {}
-            #ident.auto_ref_mut()
-          }},
-        }
-      });
-      (quote! {
-        macro_rules! #alias {
-          ($($arg:expr),* $(,)?) => {
-            #_name(#(#capture_args),*, $($arg),*)
-          }
-        }
-      })
+      create_macro_def(
+        arg
+          .alias
+          .as_ref()
+          .map(|x| &x.alias)
+          .unwrap_or_else(|| &arg.name),
+        &create_fn_name(&arg.name),
+        arg.captures.0.iter(),
+      )
       .into()
     })
     .flatten()
@@ -164,7 +102,7 @@ pub fn use_helper_fn(args: TokenStream) -> TokenStream {
   struct UseHelperFnArg {
     name: syn::Ident,
     _paren: token::Paren,
-    captures: CaptureArgsNoType,
+    captures: CaptureArgs,
     alias: Option<UseHelperFnAlias>,
   }
 
@@ -194,7 +132,16 @@ pub fn use_helper_fn(args: TokenStream) -> TokenStream {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+struct CaptureArgsWithTypes(Punctuated<CaptureArgWithType, Token![,]>);
+
+impl Parse for CaptureArgsWithTypes {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    Ok(CaptureArgsWithTypes(input.parse_terminated(<_>::parse)?))
+  }
+}
+
+#[derive(Debug)]
 struct CaptureArgs(Punctuated<CaptureArg, Token![,]>);
 
 impl Parse for CaptureArgs {
@@ -204,35 +151,9 @@ impl Parse for CaptureArgs {
 }
 
 #[derive(Debug)]
-struct CaptureArgsNoType(Punctuated<CaptureArgNoType, Token![,]>);
-
-impl Parse for CaptureArgsNoType {
-  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-    Ok(CaptureArgsNoType(input.parse_terminated(<_>::parse)?))
-  }
-}
-
-#[derive(Debug)]
-struct CaptureArgNoType {
-  kind: CaptureArgKind,
-  ident: syn::Ident,
-}
-
-impl Parse for CaptureArgNoType {
-  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-    Ok(CaptureArgNoType {
-      kind: input.parse()?,
-      ident: input.parse()?,
-    })
-  }
-}
-
-#[derive(Debug, Clone)]
 struct CaptureArg {
   kind: CaptureArgKind,
   ident: syn::Ident,
-  colon: Token![:],
-  ty: Type,
 }
 
 impl Parse for CaptureArg {
@@ -240,6 +161,21 @@ impl Parse for CaptureArg {
     Ok(CaptureArg {
       kind: input.parse()?,
       ident: input.parse()?,
+    })
+  }
+}
+
+#[derive(Debug)]
+struct CaptureArgWithType {
+  capture: CaptureArg,
+  colon: Token![:],
+  ty: Type,
+}
+
+impl Parse for CaptureArgWithType {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    Ok(CaptureArgWithType {
+      capture: input.parse()?,
       colon: input.parse()?,
       ty: input.parse()?,
     })
@@ -266,6 +202,58 @@ impl Parse for CaptureArgKind {
       }
     } else {
       Ok(CaptureArgKind::Value)
+    }
+  }
+}
+
+impl ToTokens for CaptureArgKind {
+  fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+    match self {
+      CaptureArgKind::Value => {}
+      CaptureArgKind::Ref(..) => tokens.extend(quote!(&)),
+      CaptureArgKind::RefMut(..) => tokens.extend(quote!(&mut)),
+    }
+  }
+}
+
+fn create_fn_name(name: &Ident2) -> Ident2 {
+  Ident2::new(&format!("__helper_fn_{}", name)[..], Span2::call_site())
+}
+
+fn create_macro_def<'a>(
+  name: &Ident2,
+  fn_name: &Ident2,
+  args: impl Iterator<Item = &'a CaptureArg>,
+) -> TokenStream2 {
+  let capture_args = args.map(|arg| {
+    let ident = &arg.ident;
+    match &arg.kind {
+      CaptureArgKind::Value => quote! { #ident },
+      CaptureArgKind::Ref(..) => quote! {{
+        trait AutoRef {
+          fn auto_ref(&self) -> &Self {
+            self
+          }
+        }
+        impl<T> AutoRef for T {}
+        #ident.auto_ref()
+      }},
+      CaptureArgKind::RefMut(..) => quote! {{
+        trait AutoRefMut {
+          fn auto_ref_mut(&mut self) -> &mut Self {
+            self
+          }
+        }
+        impl<T> AutoRefMut for T {}
+        #ident.auto_ref_mut()
+      }},
+    }
+  });
+  quote! {
+    macro_rules! #name {
+      ($($arg:expr),* $(,)?) => {
+        #fn_name(#(#capture_args),*, $($arg),*)
+      }
     }
   }
 }
