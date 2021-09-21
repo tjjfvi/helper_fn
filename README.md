@@ -4,21 +4,48 @@ A macro to create closure-like helper functions.
 
 ## Usage
 
+This attribute can be applied to a function item to allow it to capture
+variables from scope. The helper function must be declared before its usage and
+after the variables it captures.
+
+You can supply no arguments to the macro, and it will implicitly capture
+variables from the surrounding scope, like a closure:
+
 ```rust
 use helper_fn::helper_fn;
 
 let mut num = 5;
 
 #[helper_fn]
-fn get_num() {
+fn get_num() -> i32 {
   num // implicitly captured
+}
+
+assert_eq!(get_num!(), 5); // note that this is a macro invocation, not a function call
+```
+
+Or, you can specify which variables to capture, which enables recursion and
+greatly improves IDE support:
+
+```rust
+use helper_fn::helper_fn;
+
+let mut num = 5;
+
+#[helper_fn(num: i32)] // explicitly captured
+fn get_num() -> i32 {
+  num
 }
 
 assert_eq!(get_num!(), 5);
 ```
 
-Note that the helper function must be declared before its usage and after the
-variables it captures.
+Variables can be captured by value (using move or copy semantics), by reference,
+or by mutable reference:
+
+```text
+#[helper_fn(copied: i32, moved: Vec<i32>, &by_ref: Foo, &mut by_mut_ref: Bar)]
+```
 
 ## Rationale
 
@@ -69,7 +96,7 @@ use helper_fn::helper_fn;
 let mut num = 5;
 
 #[helper_fn]
-fn get_num() {
+fn get_num() -> i32 {
   num // implicitly captured
 }
 
@@ -84,7 +111,7 @@ use helper_fn::helper_fn;
 let mut num = 5;
 
 #[helper_fn]
-fn get_num() {
+fn get_num() -> i32 {
   num
 }
 
