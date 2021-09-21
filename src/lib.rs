@@ -9,7 +9,7 @@ use syn::{
   Type, Visibility,
 };
 
-/// See the [crate level documentation](index.html) for more details.
+/// See the [crate level documentation](index.html).
 #[proc_macro_attribute]
 #[proc_macro_error]
 pub fn helper_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -40,35 +40,25 @@ pub fn helper_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
   let output = &item.sig.output;
   let name = &item.sig.ident;
   let fn_name = create_fn_name(name);
-  if !attr.is_empty() {
-    let captures = parse_macro_input!(attr as CaptureArgsWithTypes);
-    let capture_params = captures.0.iter().map(|x| {
-      let ident = &x.capture.ident;
-      let kind = &x.capture.kind;
-      let ty = &x.ty;
-      quote! { #ident: #kind #ty }
-    });
-    let macro_def = create_macro_def(name, &fn_name, captures.0.iter().map(|x| &x.capture));
-    (quote! {
-      fn #fn_name(#(#capture_params),*, #(#inputs),*) #output {
-        #macro_def
-        #block
-      }
+  let captures = parse_macro_input!(attr as CaptureArgsWithTypes);
+  let capture_params = captures.0.iter().map(|x| {
+    let ident = &x.capture.ident;
+    let kind = &x.capture.kind;
+    let ty = &x.ty;
+    quote! { #ident: #kind #ty }
+  });
+  let macro_def = create_macro_def(name, &fn_name, captures.0.iter().map(|x| &x.capture));
+  (quote! {
+    fn #fn_name(#(#capture_params),*, #(#inputs),*) #output {
       #macro_def
-    })
-    .into()
-  } else {
-    (quote! {
-      macro_rules! #name {
-        ($($arg:expr),* $(,)?) => {
-          (|#(#inputs),*| #output #block)($($arg),*)
-        }
-      }
-    })
-    .into()
-  }
+      #block
+    }
+    #macro_def
+  })
+  .into()
 }
 
+/// See the [crate level documentation](index.html).
 #[proc_macro]
 pub fn use_helper_fn(args: TokenStream) -> TokenStream {
   let args = parse_macro_input!(args as UseHelperFnArgs);
@@ -230,20 +220,12 @@ fn create_macro_def<'a>(
     match &arg.kind {
       CaptureArgKind::Value => quote! { #ident },
       CaptureArgKind::Ref(..) => quote! {{
-        trait AutoRef {
-          fn auto_ref(&self) -> &Self {
-            self
-          }
-        }
+        trait AutoRef { fn auto_ref(&self) -> &Self { self } }
         impl<T> AutoRef for T {}
         #ident.auto_ref()
       }},
       CaptureArgKind::RefMut(..) => quote! {{
-        trait AutoRefMut {
-          fn auto_ref_mut(&mut self) -> &mut Self {
-            self
-          }
-        }
+        trait AutoRefMut { fn auto_ref_mut(&mut self) -> &mut Self { self } }
         impl<T> AutoRefMut for T {}
         #ident.auto_ref_mut()
       }},
